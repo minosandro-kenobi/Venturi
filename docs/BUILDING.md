@@ -83,6 +83,9 @@ A working graphics backend is required at runtime (Vulkan on Linux, through
 `mesa-vulkan-drivers` or the proprietary GPU driver): without one, `wgpu`
 finds no adapter and the window does not open.
 
+For SMB files dragged from Dolphin on Wayland, see the optional runtime
+requirements in [Network media](NETWORK_MEDIA.md).
+
 `vv-app mcp` runs the MCP server for AI agents instead of the window, and
 `vv-app --mcp` opens the window with it on: see [MCP.md](MCP.md).
 

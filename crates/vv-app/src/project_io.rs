@@ -60,6 +60,19 @@ pub(crate) struct PendingDialog {
     pub(crate) rx: mpsc::Receiver<DialogOutcome>,
 }
 
+#[derive(Debug, Clone)]
+enum DropTarget {
+    Project(Option<FolderId>),
+    Library(Option<String>),
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct PendingRemoteDrop {
+    target: DropTarget,
+    epoch: u64,
+    rx: mpsc::Receiver<crate::remote_drop::ResolvedDrop>,
+}
+
 /// The export window: open from the start of an export until closed, so the
 /// outcome stays readable after the job is over.
 pub(crate) struct ExportUiState {
@@ -356,6 +369,8 @@ impl VenturiApp {
     /// into the library if dropped on its tab, into the project anywhere
     /// else; into the folder they were dropped on, if any.
     pub(crate) fn poll_dropped_files(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "linux")]
+        self.poll_remote_drops(ctx);
         let (paths, pointer): (Vec<PathBuf>, _) = ctx.input(|i| {
             let paths = i
                 .raw
@@ -373,18 +388,98 @@ impl VenturiApp {
         let on_pool = pool_area
             .zip(pointer)
             .is_some_and(|(area, p)| area.contains(p));
-        match self.library_ui.tab {
+        let target = match self.library_ui.tab {
             library_ui::PoolTab::Library if on_pool => {
-                let folder = self.library_ui.pool.file_drop_folder.clone();
+                DropTarget::Library(self.library_ui.pool.file_drop_folder.clone())
+            }
+            library_ui::PoolTab::Project if on_pool => {
+                DropTarget::Project(self.media_pool_state.file_drop_folder)
+            }
+            _ => DropTarget::Project(None),
+        };
+        #[cfg(target_os = "linux")]
+        if paths
+            .iter()
+            .any(|path| crate::remote_drop::smb_uri(path).is_some())
+        {
+            let locations = paths
+                .into_iter()
+                .map(|path| match crate::remote_drop::smb_uri(&path) {
+                    Some(uri) => crate::remote_drop::Location::Smb(uri.to_owned()),
+                    None => crate::remote_drop::Location::Local(path),
+                })
+                .collect();
+            let (tx, rx) = mpsc::channel();
+            self.pending_remote_drops.push(PendingRemoteDrop {
+                target,
+                epoch: self.session.epoch(),
+                rx,
+            });
+            let waker = self.session.waker();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::remote_drop::resolve_locations(locations));
+                waker.wake();
+            });
+            return;
+        }
+        self.import_file_drop(paths, target);
+    }
+
+    fn import_file_drop(&mut self, paths: Vec<PathBuf>, target: DropTarget) {
+        match target {
+            DropTarget::Library(folder) => {
                 self.library_ui.pool.expanded.extend(folder.clone());
                 self.open_paths_in_library(paths, folder);
             }
-            library_ui::PoolTab::Project if on_pool => {
-                let folder = self.media_pool_state.file_drop_folder;
+            DropTarget::Project(folder) => {
                 self.media_pool_state.expanded.extend(folder);
                 self.open_paths_into(paths, folder);
             }
-            _ => self.open_paths(paths),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn poll_remote_drops(&mut self, ctx: &egui::Context) {
+        let mut ready = Vec::new();
+        self.pending_remote_drops
+            .retain(|pending| match pending.rx.try_recv() {
+                Ok(resolved) => {
+                    ready.push((pending.target.clone(), pending.epoch, resolved));
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            });
+        for (target, epoch, resolved) in ready {
+            if epoch != self.session.epoch() {
+                continue;
+            }
+            if !resolved.failures.is_empty() {
+                self.project_error = Some(
+                    resolved
+                        .failures
+                        .into_iter()
+                        .map(|failure| {
+                            use crate::remote_drop::ResolveError as E;
+                            let reason = match failure.error {
+                                E::MissingHelper => t!("remote_drop.missing_helper"),
+                                E::MissingKioFuse => t!("remote_drop.missing_kio_fuse"),
+                                E::MountFailed => t!("remote_drop.mount_failed"),
+                                E::InvalidReply => t!("remote_drop.invalid_reply"),
+                            };
+                            t!("remote_drop.failed", name = failure.name, reason = reason)
+                                .into_owned()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+            if !resolved.paths.is_empty() {
+                self.import_file_drop(resolved.paths, target);
+            }
+        }
+        if !self.pending_remote_drops.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 
