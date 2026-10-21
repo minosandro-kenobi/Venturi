@@ -1,0 +1,25 @@
+_version: 2
+
+remote_drop.resolving:
+  en: "Opening network files…"
+  it: "Accesso ai file di rete…"
+
+remote_drop.failed:
+  en: "Could not import %{name}: %{reason}"
+  it: "Impossibile importare %{name}: %{reason}"
+
+remote_drop.missing_helper:
+  en: "Install dbus-send to access SMB files dragged from Dolphin."
+  it: "Installa dbus-send per accedere ai file SMB trascinati da Dolphin."
+
+remote_drop.missing_kio_fuse:
+  en: "Install kio-fuse to make the remote file accessible."
+  it: "Installa kio-fuse per rendere accessibile il file remoto."
+
+remote_drop.mount_failed:
+  en: "Check that the share opens in Dolphin and that kio-fuse is available."
+  it: "Verifica che la condivisione si apra in Dolphin e che kio-fuse sia disponibile."
+
+remote_drop.invalid_reply:
+  en: "KIO-FUSE did not return an absolute filesystem path."
+  it: "KIO-FUSE non ha restituito un percorso assoluto sul filesystem."

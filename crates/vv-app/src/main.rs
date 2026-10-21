@@ -36,6 +36,8 @@ mod presets;
 mod project_io;
 mod properties_panel;
 mod proxy_worker;
+#[cfg(target_os = "linux")]
+mod remote_drop;
 mod render_ahead;
 mod settings;
 mod settings_dialog;
@@ -471,6 +473,8 @@ struct VenturiApp {
     /// File dialog opened on a separate thread: on the GNOME/Wayland event
     /// loop thread it marks the app as unresponsive.
     pending_dialog: Option<PendingDialog>,
+    #[cfg(target_os = "linux")]
+    pending_remote_drops: Vec<PendingRemoteDrop>,
 
     /// Audio meter (toggle in View): a narrow band on the right
     /// of the timeline with the level of the outgoing audio. On by
@@ -597,6 +601,8 @@ impl Default for VenturiApp {
             forced_relink: None,
             forced_relink_criteria: Default::default(),
             pending_dialog: None,
+            #[cfg(target_os = "linux")]
+            pending_remote_drops: Vec::new(),
             audiometer_enabled: true,
             audiometer_level: (0.0, 0.0),
             viewer_fullscreen: false,
@@ -4067,6 +4073,11 @@ impl VenturiApp {
                             .desired_width(180.0)
                             .text(t!("project.import_progress", done = done, total = total)),
                     );
+                }
+                #[cfg(target_os = "linux")]
+                if !self.pending_remote_drops.is_empty() {
+                    ui.spinner();
+                    ui.label(t!("remote_drop.resolving"));
                 }
                 // Above the panel it opens, like the toggles on the left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

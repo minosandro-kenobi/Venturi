@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote_drop::Location;
 
 #[test]
 fn uri_list_yields_decoded_local_paths() {
@@ -6,8 +7,8 @@ fn uri_list_yields_decoded_local_paths() {
     assert_eq!(
         parse_uri_list(list),
         vec![
-            PathBuf::from("/home/me/a b.mp4"),
-            PathBuf::from("/tmp/è.wav")
+            Location::Local(PathBuf::from("/home/me/a b.mp4")),
+            Location::Local(PathBuf::from("/tmp/è.wav"))
         ]
     );
 }

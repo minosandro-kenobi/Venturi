@@ -4,9 +4,7 @@
 //! connection, like smithay-clipboard does; the files reach egui in
 //! `raw_input_hook`.
 
-use std::ffi::OsString;
 use std::io::Read;
-use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +25,7 @@ use sctk::seat::{Capability, SeatHandler, SeatState};
 use sctk::{delegate_data_device, delegate_registry, delegate_seat, registry_handlers};
 
 use crate::paste_image::IMAGE_MIME_TYPES;
+use crate::remote_drop::{Location, parse_uri_list};
 
 const URI_LIST: &str = "text/uri-list";
 
@@ -36,6 +35,7 @@ struct Shared {
     /// Where the drag is, in surface coordinates: egui gets no pointer
     /// events during it, and the drop target depends on it.
     position: Option<(f64, f64)>,
+    last_position: Option<(f64, f64)>,
     dropped: Vec<PathBuf>,
     selection: Option<SelectionOffer>,
 }
@@ -155,6 +155,12 @@ impl State {
         self.shared.lock().unwrap().hovering = hovering;
         self.ctx.request_repaint();
     }
+
+    fn set_position(&self, x: f64, y: f64) {
+        let mut shared = self.shared.lock().unwrap();
+        shared.position = Some((x, y));
+        shared.last_position = shared.position;
+    }
 }
 
 impl DataDeviceHandler for State {
@@ -167,7 +173,7 @@ impl DataDeviceHandler for State {
         y: f64,
         _: &WlSurface,
     ) {
-        self.shared.lock().unwrap().position = Some((x, y));
+        self.set_position(x, y);
         let Some(offer) = self.drag_offer(device) else {
             return;
         };
@@ -184,7 +190,7 @@ impl DataDeviceHandler for State {
     }
 
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, x: f64, y: f64) {
-        self.shared.lock().unwrap().position = Some((x, y));
+        self.set_position(x, y);
         self.ctx.request_repaint();
     }
 
@@ -210,17 +216,26 @@ impl DataDeviceHandler for State {
         let conn = self.conn.clone();
         let shared = self.shared.clone();
         let ctx = self.ctx.clone();
+        let position = self.shared.lock().unwrap().last_position;
         std::thread::spawn(move || {
             let mut uri_list = Vec::new();
             let _ = pipe.read_to_end(&mut uri_list);
             offer.finish();
             offer.destroy();
             let _ = conn.flush();
-            shared
-                .lock()
-                .unwrap()
-                .dropped
-                .extend(parse_uri_list(&uri_list));
+            let paths: Vec<PathBuf> = parse_uri_list(&uri_list)
+                .into_iter()
+                .map(|location| match location {
+                    Location::Local(path) => path,
+                    Location::Smb(uri) => PathBuf::from(uri),
+                })
+                .collect();
+            let mut shared = shared.lock().unwrap();
+            if !paths.is_empty() {
+                shared.position = position;
+                shared.dropped.extend(paths);
+            }
+            drop(shared);
             ctx.request_repaint();
         });
     }
@@ -302,44 +317,6 @@ impl ProvidesRegistryState for State {
 delegate_data_device!(State);
 delegate_seat!(State);
 delegate_registry!(State);
-
-/// Local paths from a `text/uri-list` (RFC 2483): comments and non-`file:`
-/// URIs are discarded.
-fn parse_uri_list(bytes: &[u8]) -> Vec<PathBuf> {
-    bytes
-        .split(|&b| b == b'\n')
-        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
-        .filter(|line| !line.starts_with(b"#"))
-        .filter_map(|line| line.strip_prefix(b"file://"))
-        .filter_map(|rest| {
-            // After `file://` comes the host, usually empty or `localhost`.
-            let path = &rest[rest.iter().position(|&b| b == b'/')?..];
-            Some(PathBuf::from(OsString::from_vec(percent_decode(path))))
-        })
-        .collect()
-}
-
-fn percent_decode(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = bytes
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (bytes[i], hex) {
-            (b'%', Some(byte)) => {
-                out.push(byte);
-                i += 3;
-            }
-            (b, _) => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 #[path = "tests/wayland_dnd.rs"]
