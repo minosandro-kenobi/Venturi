@@ -512,6 +512,12 @@ impl VenturiApp {
         let content = self.show_pool_tabs(ui, area);
         pool_view::beside_tabs(ui, content, |ui| {
             self.show_library_copy_progress(ui);
+            if let Some((done, total)) = self.import_progress() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t!("project.import_progress", done = done, total = total));
+                });
+            }
             match self.library_ui.tab {
                 library_ui::PoolTab::Project => self.show_project_pool(ui, preview_action),
                 library_ui::PoolTab::Library => self.show_library(ui, preview_action),
