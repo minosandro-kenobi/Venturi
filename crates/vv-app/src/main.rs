@@ -4068,6 +4068,7 @@ impl VenturiApp {
                 }
                 if let Some((done, total)) = self.import_progress() {
                     ui.separator();
+                    ui.spinner();
                     ui.add(
                         egui::ProgressBar::new(done as f32 / total.max(1) as f32)
                             .desired_width(180.0)
