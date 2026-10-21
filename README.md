@@ -68,6 +68,8 @@ the part that has to be perfect.
 - **Camera Shake.** Repeatable handheld motion with keyframed strength,
   speed, pan, tilt, rotation, zoom and smoothness, plus a seed and edge
   compensation. See [the controls](docs/CAMERA_SHAKE.md).
+- **Audio Pitch Shift.** Transpose individual clips in semitones and cents,
+  with formant preservation and presets. See [the controls](docs/PITCH_SHIFT.md).
 - **Color correction.** Shadows, midtones, highlights and offset wheels,
   auto balance and GPU scopes (waveform, RGB parade, vectorscope,
   histogram), composed in 16-bit float.
