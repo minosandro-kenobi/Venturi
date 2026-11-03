@@ -56,6 +56,8 @@ pub struct CameraShakeTracks {
     params: [Keyframed<f32>; 7],
     pub seed: u32,
     pub auto_zoom: bool,
+    /// Source frame from which speed integration starts.
+    pub phase_origin: FrameIdx,
 }
 
 impl Default for CameraShakeTracks {
@@ -64,11 +66,16 @@ impl Default for CameraShakeTracks {
             params: ShakeParam::ALL.map(|p| Keyframed::constant(p.default_value())),
             seed: 0,
             auto_zoom: true,
+            phase_origin: 0,
         }
     }
 }
 
 impl CameraShakeTracks {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
     pub fn track(&self, param: ShakeParam) -> &Keyframed<f32> {
         &self.params[param.index()]
     }
@@ -101,7 +108,11 @@ impl CameraShakeTracks {
         if amount == 0.0 {
             return;
         }
-        let phase = speed_phase(self.track(ShakeParam::Speed), frame) / fps;
+        let phase = speed_phase(
+            self.track(ShakeParam::Speed),
+            frame,
+            self.phase_origin as f64,
+        ) / fps;
         let smoothness = value(ShakeParam::Smoothness);
         let noise = |channel: u32| {
             let seed = self.seed.wrapping_add(channel.wrapping_mul(0x9e3779b9));
@@ -147,7 +158,7 @@ impl CameraShakeTracks {
 
 mod param_tracks {
     use super::*;
-    use serde::de::{MapAccess, SeqAccess, Visitor};
+    use serde::de::{MapAccess, Visitor};
 
     pub fn serialize<S: serde::Serializer>(
         params: &[Keyframed<f32>; 7],
@@ -164,7 +175,7 @@ mod param_tracks {
             type Value = [Keyframed<f32>; 7];
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("named camera shake tracks or a legacy track array")
+                formatter.write_str("named camera shake tracks")
             }
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
@@ -174,28 +185,8 @@ mod param_tracks {
                 }
                 Ok(params)
             }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                let mut params = CameraShakeTracks::default().params;
-                // Preserve the original positional format independently of enum order.
-                for param in [
-                    ShakeParam::MotionScale,
-                    ShakeParam::Speed,
-                    ShakeParam::Pan,
-                    ShakeParam::Tilt,
-                    ShakeParam::Rotation,
-                    ShakeParam::Zoom,
-                    ShakeParam::Smoothness,
-                ] {
-                    let Some(track) = seq.next_element()? else {
-                        break;
-                    };
-                    params[param.index()] = track;
-                }
-                Ok(params)
-            }
         }
-        deserializer.deserialize_any(TracksVisitor)
+        deserializer.deserialize_map(TracksVisitor)
     }
 }
 
@@ -240,11 +231,11 @@ fn speed_value(track: &Keyframed<f32>, frame: f64) -> f64 {
     }
 }
 
-fn speed_phase(track: &Keyframed<f32>, frame: f64) -> f64 {
+fn speed_phase(track: &Keyframed<f32>, frame: f64, origin: f64) -> f64 {
     if track.is_constant() {
-        return frame * speed_value(track, 0.0);
+        return (frame - origin) * speed_value(track, origin);
     }
-    let (start, end) = (frame.min(0.0), frame.max(0.0));
+    let (start, end) = (frame.min(origin), frame.max(origin));
     let mut a = start;
     let mut area = 0.0;
     // Integrating speed keeps animated speed changes from jumping in phase.
@@ -269,7 +260,7 @@ fn speed_phase(track: &Keyframed<f32>, frame: f64) -> f64 {
         }
         a = b;
     }
-    if frame < 0.0 { -area } else { area }
+    if frame < origin { -area } else { area }
 }
 
 #[cfg(test)]

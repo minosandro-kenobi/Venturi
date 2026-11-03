@@ -8,6 +8,26 @@ fn at(shake: &CameraShakeTracks, frame: FrameIdx) -> Transform {
 }
 
 #[test]
+fn a_shifted_phase_origin_scales_with_the_frame_rate() {
+    let mut effects = crate::EffectStack::default();
+    effects
+        .filters
+        .push(ClipFilter::new(FilterKind::CameraShake));
+    effects.shift_keyframes(25);
+    let mut before = Transform::default();
+    effects.filters[0]
+        .shake
+        .apply(&mut before, 75, 25.0, (1920, 1080));
+    effects.rescale_keyframe_times(crate::Rational::new(25, 1), crate::Rational::new(50, 1));
+    let mut after = Transform::default();
+    effects.filters[0]
+        .shake
+        .apply(&mut after, 150, 50.0, (1920, 1080));
+    assert_eq!(before, after);
+    assert_eq!(effects.filters[0].shake.phase_origin, 50);
+}
+
+#[test]
 fn the_same_frame_is_identical_after_seeks_and_across_sessions() {
     let shake = CameraShakeTracks::default();
     let expected = at(&shake, 41);
@@ -69,12 +89,12 @@ fn animated_speed_integrates_instead_of_jumping_at_keyframes() {
     let mut speed = Keyframed::constant(1.0);
     speed.upsert(0, 1.0, Interpolation::Linear);
     speed.upsert(100, 3.0, Interpolation::Hold);
-    assert!((speed_phase(&speed, 50.0) - 75.0).abs() < 1e-5);
-    assert!((speed_phase(&speed, 100.0) - 200.0).abs() < 1e-5);
-    assert!((speed_phase(&speed, 101.0) - 203.0).abs() < 1e-5);
+    assert!((speed_phase(&speed, 50.0, 0.0) - 75.0).abs() < 1e-5);
+    assert!((speed_phase(&speed, 100.0, 0.0) - 200.0).abs() < 1e-5);
+    assert!((speed_phase(&speed, 101.0, 0.0) - 203.0).abs() < 1e-5);
     speed.upsert(0, 1.0, Interpolation::Hold);
-    assert!((speed_phase(&speed, 100.0) - 100.0).abs() < 1e-5);
-    assert!((speed_phase(&speed, -25.0) + 25.0).abs() < 1e-5);
+    assert!((speed_phase(&speed, 100.0, 0.0) - 100.0).abs() < 1e-5);
+    assert!((speed_phase(&speed, -25.0, 0.0) + 25.0).abs() < 1e-5);
 }
 
 #[test]
@@ -223,33 +243,14 @@ fn named_tracks_round_trip_and_missing_parameters_keep_their_defaults() {
 }
 
 #[test]
-fn positional_tracks_from_the_first_version_still_load() {
-    let mut shake = CameraShakeTracks::default();
-    shake.seed = 17;
-    shake.auto_zoom = false;
-    shake
-        .track_mut(ShakeParam::Pan)
-        .upsert(12, 2.5, Interpolation::EaseInOut);
-    let legacy = format!(
-        "(params:{},seed:17,auto_zoom:false)",
-        ron::to_string(&shake.params).unwrap()
-    );
-    assert_eq!(ron::from_str::<CameraShakeTracks>(&legacy).unwrap(), shake);
-    let legacy = serde_json::json!({"params": shake.params, "seed": 17, "auto_zoom": false});
-    assert_eq!(
-        serde_json::from_value::<CameraShakeTracks>(legacy).unwrap(),
-        shake
-    );
-}
-
-#[test]
-fn shake_settings_are_only_written_for_camera_shake_filters() {
+fn default_shake_settings_are_omitted_and_changed_settings_round_trip() {
     for kind in [
         FilterKind::BoxBlur,
         FilterKind::GaussianBlur,
         FilterKind::DropShadow,
         FilterKind::Exposure,
         FilterKind::ColorCorrection,
+        FilterKind::CameraShake,
     ] {
         let filter = ClipFilter::new(kind);
         let json = serde_json::to_value(&filter).unwrap();
@@ -257,8 +258,21 @@ fn shake_settings_are_only_written_for_camera_shake_filters() {
         let ron = ron::to_string(&filter).unwrap();
         assert!(!ron.contains("shake:"), "{ron}");
         assert_eq!(ron::from_str::<ClipFilter>(&ron).unwrap(), filter);
+        let mut filter = filter;
+        filter.shake.seed = 17;
+        filter
+            .shake
+            .track_mut(ShakeParam::Pan)
+            .upsert(12, 2.5, Interpolation::EaseInOut);
+        let json = serde_json::to_value(&filter).unwrap();
+        assert_eq!(serde_json::from_value::<ClipFilter>(json).unwrap(), filter);
+        assert_eq!(
+            ron::from_str::<ClipFilter>(&ron::to_string(&filter).unwrap()).unwrap(),
+            filter
+        );
     }
-    let filter = ClipFilter::new(FilterKind::CameraShake);
+    let mut filter = ClipFilter::new(FilterKind::CameraShake);
+    filter.shake.seed = 17;
     let json = serde_json::to_value(&filter).unwrap();
     for param in ShakeParam::ALL {
         let name = serde_json::to_value(param).unwrap();
